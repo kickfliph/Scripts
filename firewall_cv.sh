@@ -1,0 +1,160 @@
+#!/bin/sh
+# -*- coding: utf-8 -*-
+#===================================================
+# 
+# Firewall Full drop.
+#
+# Copyleft (C) 2012  harold Luzardo <haroldburtonl@gmial.com>
+#
+# This script is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software 
+# Foundation; either version 3 of the License, or (at your option) any later
+# version.
+#
+# This script is distributed in the hope that it will be useful, but WITHOUT 
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or 
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License 
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along with 
+# this PACKAGE (see COPYING); if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+# Created on: Jun 30, 2012 - Harold Luzardo
+#
+#===================================================
+
+#interfaces de red
+EXTIF1=eth0
+EXTIF2=eth1
+VPNIF=eth2
+LANIF=eth3
+NS1IF=eth4
+NS2IF=vmbr0
+
+cvl="172.18.1.0/24"
+srv="172.18.2.0/26"
+dsr="172.18.3.0/26"
+wifi="172.18.4.0/26"
+hw="172.18.1.5/27"
+woi="172.18.2.0/25"
+LOOPBACK="127.0.0.0"
+ANY="0.0.0.0/0"
+CLASS_A="10.0.0.0/8"
+CLASS_B="172.16.0.0/12"
+CLASS_C="192.168.0.0/16"
+CLASS_D_MULTICAST="224.0.0.0/4"
+CLASS_E_RESERVED_NET="240.0.0.0/5"
+P_PORTS="0:1023"
+UP_PORTS="1024:65535"
+TR_SRC_PORTS="32769:65535"
+TR_DST_PORTS="33434:33523"
+SERVWEB="192.168.1.2"
+SERVCORREO="192.168.1.3"
+SERVAUDIO="192.168.1.4"
+SERVVIDEO="192.168.1.5"
+SERVRESP="192.168.0.20"
+SERVRESP1="192.168.0.21"
+SERVMUSICA="192.168.0.28"
+SERVMIRROR="192.168.0.29"
+KEEPSTATE=" -m state --state ESTABLISHED,RELATED"
+
+#################################################################################################################################
+
+AcceptInt() {
+protocol=$1
+ports=$2
+srcs=$3
+for port in `echo $ports | sed 's/,/ /g'`
+do
+    if [ "$srcs" = "" ] ; then
+        iptables -A INPUT -i $LANIF -p $protocol --sport $port -m state --state ESTABLISHED -j ACCEPT
+        iptables -A OUTPUT -o $LANIF -p $protocol --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+    else
+        for src in `echo $srcs | sed 's/,/ /g'`
+        do
+            iptables -A INPUT -i $LANIF -s $src -p $protocol --sport $port -m state --state ESTABLISHED -j ACCEPT
+            iptables -A OUTPUT -o $LANIF -d $src -p $protocol --dport $port -m state --state NEW,ESTABLISHED -j ACCEPT
+        done
+    fi
+done
+}
+
+#################################################################################################################################
+
+modprobe ip_tables
+modprobe iptable_nat
+modprobe ip_conntrack
+modprobe ip_conntrack_ftp
+modprobe ip_nat_ftp
+iptables -F
+iptables -X
+iptables -Z
+iptables -t nat -F
+
+#Politicas Drop por defecto
+iptables -P INPUT DROP
+iptables -P OUTPUT DROP
+iptables -P FORWARD DROP
+
+## Loopback
+iptables -A INPUT -i lo  -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+# Desechar cualquier paquete que no pudo ser identificado.
+iptables -A INPUT -m state --state INVALID -j DROP
+
+# Drop invalid packets.
+iptables -A INPUT -p tcp -m tcp --tcp-flags FIN,SYN,RST,PSH,ACK,URG NONE -j DROP
+iptables -A INPUT -p tcp -m tcp --tcp-flags SYN,FIN SYN,FIN              -j DROP
+iptables -A INPUT -p tcp -m tcp --tcp-flags SYN,RST SYN,RST              -j DROP
+iptables -A INPUT -p tcp -m tcp --tcp-flags FIN,RST FIN,RST              -j DROP
+iptables -A INPUT -p tcp -m tcp --tcp-flags ACK,FIN FIN                  -j DROP
+iptables -A INPUT -p tcp -m tcp --tcp-flags ACK,URG URG                  -j DROP
+
+## SYN-FLOODING
+iptables -N syn-flood
+iptables -A INPUT -i $EXTIF1 -p tcp --syn -j syn-flood
+iptables -A syn-flood -m limit --limit 1/s --limit-burst 4 -j RETURN
+#iptables -A syn-flood -j LOG --log-prefix "IPTABLES SYN-FLOOD:"
+iptables -A syn-flood -j DROP
+
+## aseguremonos q las nuevas coneciones tcp sean paquetes SYN
+#iptables -A INPUT -i $EXTIF -p tcp ! --syn -m state --state NEW -j LOG --log-prefix "IPTABLES SYN-FLOOD:"
+iptables -A INPUT -i $EXTIF1 -p tcp ! --syn -m state --state NEW -j DROP
+
+## Ping de la muerte
+iptables -N ping-death
+iptables -A INPUT -i $EXTIF1 -p icmp --icmp-type echo-request -j ping-death
+iptables -A ping-death -m limit --limit 1/s --limit-burst 4 -j RETURN
+#iptables -A ping-death -j LOG --log-prefix "IPTABLES PING-DEATH:"
+iptables -A ping-death -j DROP
+
+## Anti es scan
+iptables -N port-scan
+iptables -A INPUT -i $EXTIF1 -p tcp --tcp-flags SYN,ACK,FIN,RST RST -j port-scan
+iptables -A port-scan -m limit --limit 1/s --limit-burst 4 -j RETURN
+#iptables -A port-scan -j LOG --log-prefix "IPTABLES PORT-SCAN:"
+iptables -A port-scan -j DROP
+
+## SPOOFING
+# drop i:TREXT source:local
+iptables -N spoofing
+iptables -A INPUT -i $EXTIF -s $CLASS_A -j spoofing
+iptables -A INPUT -i $EXTIF -s $CLASS_B -j spoofing
+iptables -A INPUT -i $EXTIF -s $CLASS_C -j spoofing
+iptables -A INPUT -i $EXTIF -s $CLASS_D_MULTICAST -j spoofing
+iptables -A INPUT -i $EXTIF -s $CLASS_E_RESERVED_NET -j spoofing
+iptables -A INPUT -i $EXTIF -d $LOOPBACK -j spoofing
+#iptables -A spoofing -j LOG --log-prefix "IPTABLES SPOOFING:"
+iptables -A spoofing -j DROP
+
+# Guardar los accesos con paquetes fragmentados, recurso utilizado para bajarlo
+# servidores y otras maldades (bug en Apache por ejemplo)
+#iptables -A INPUT -i $EXTIF -f -j LOG --log-prefix "Fragmento!"
+iptables -A INPUT -i $EXTIF -f -j DROP
+
+#################################################################################################################################
+
+AcceptInt TCP 22
+

@@ -1,4 +1,4 @@
 Script
 ======
 
-scripts de administración
+Scripts made for administration using GNU/Linux Debian.
